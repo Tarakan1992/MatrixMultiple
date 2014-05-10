@@ -5,8 +5,11 @@ namespace MatrixMultiple
 {
 	enum MessageType
 	{
-		FromMaster = 10,
-		FromSlave = 20
+		OffsetRow = 10,
+		Rows = 20,
+		MatrixA = 30,
+		MatrixB = 40,
+		MatrixC = 50
 	}
 
 	class Program
@@ -21,8 +24,6 @@ namespace MatrixMultiple
 			using (new MPI.Environment(ref args))
 			{
 				var comm = Communicator.world;
-
-				//Console.Write("Rank = {0}. Time:{1}\n", comm.Rank, DateTime.Now.ToString("mm:ss.ffff"));
 
 				if (comm.Rank == 0)
 				{
@@ -52,14 +53,10 @@ namespace MatrixMultiple
 					{
 						int rows = (destination <= remainingRows) ? rowsPerSlave + 1 : rowsPerSlave;
 
-						//Console.Write("Send to {0}-worker {1} rows. Time:{2}\n", destination, rows, DateTime.Now.ToString("mm:ss.ffff"));
+						var offsetRowRequest = comm.ImmediateSend(offsetRow, destination, (int)MessageType.OffsetRow);
+						
 
-						var request = comm.ImmediateSend(offsetRow, destination, (int)MessageType.FromMaster);
-						request.Wait();
-
-						request = comm.ImmediateSend(rows, destination, (int)MessageType.FromMaster);
-
-						request.Wait();
+						var rowRequest = comm.ImmediateSend(rows, destination, (int)MessageType.Rows);
 
 						var temp = new double[rows][];
 
@@ -68,27 +65,32 @@ namespace MatrixMultiple
 							temp[i] = matrixA.Data[offsetRow];
 						}
 
-						request = comm.ImmediateSend(temp, destination, (int)MessageType.FromMaster);
-						request.Wait();
+						var matrixRowRequest = comm.ImmediateSend(temp, destination, (int)MessageType.MatrixA);
 
 						var b = matrixB.Data;
 
-						request = comm.ImmediateSend(b, destination, (int)MessageType.FromMaster);
-						request.Wait();
+						var matrixBRequest = comm.ImmediateSend(b, destination, (int)MessageType.MatrixB);
+
+						offsetRowRequest.Wait();
+						rowRequest.Wait();
+						matrixRowRequest.Wait();
+						matrixBRequest.Wait();
 
 						offsetRow = offsetRow + rows;
 					}
 
 					for (var source = 1; source <= numberOfSlaves; source++)
 					{
-						var offsetRowRequest = comm.ImmediateReceive<int>(source, (int)MessageType.FromSlave);
+						var offsetRowRequest = comm.ImmediateReceive<int>(source, (int)MessageType.OffsetRow);
+						
+						var rows = comm.ImmediateReceive<int>(source, (int)MessageType.Rows);
+
+						var temp = comm.ImmediateReceive<double[][]>(source, (int)MessageType.MatrixC);
+						
 						offsetRowRequest.Wait();
-						var rows = comm.ImmediateReceive<int>(source, (int)MessageType.FromSlave);
 						rows.Wait();
-						var temp = comm.ImmediateReceive<double[][]>(source, (int)MessageType.FromSlave);
 						temp.Wait();
 
-						//Console.Write("Recive from {0}-worker {1} rows. Time:{2}\n", source, rows, DateTime.Now.ToString("mm:ss.ffff"));
 
 						for (var i = 0; i < (int)rows.GetValue(); i++)
 						{
@@ -104,21 +106,25 @@ namespace MatrixMultiple
 				else
 				{
 					const int source = 0;
-					var offsetRow = comm.ImmediateReceive<int>(source, (int)MessageType.FromMaster);
+					var offsetRow = comm.ImmediateReceive<int>(source, (int)MessageType.OffsetRow);
+					
+					var rows = comm.ImmediateReceive<int>(source, (int)MessageType.Rows);
+					
+					var a = comm.ImmediateReceive<double[][]>(source, (int)MessageType.MatrixA);
+					
+					var b = comm.ImmediateReceive<double[][]>(source, (int)MessageType.MatrixB);
+					
 					offsetRow.Wait();
-					var rows = comm.ImmediateReceive<int>(source, (int)MessageType.FromMaster);
 					rows.Wait();
-					var a = comm.ImmediateReceive<double[][]>(source, (int)MessageType.FromMaster);
 					a.Wait();
-					var b = comm.ImmediateReceive<double[][]>(source, (int)MessageType.FromMaster);
 					b.Wait();
-
-					//Console.Write("{0}-worker. Recive from master {1} rows. Time:{2}\n", comm.Rank, rows, DateTime.Now.ToString("mm:ss.ffff"));
+					
+					
 					var c = new double[(int)rows.GetValue()][];
 
 					for (var i = 0; i < (int)rows.GetValue(); i++)
 					{
-						c[i] = new double[columnA];
+						c[i] = new double[columnB];
 					}
 
 					for (var k = 0; k < columnB; k++)
@@ -133,13 +139,15 @@ namespace MatrixMultiple
 						}
 					}
 
-					var request = comm.ImmediateSend((int)offsetRow.GetValue(), source, (int)MessageType.FromSlave);
-					request.Wait();
-					request = comm.ImmediateSend((int)rows.GetValue(), source, (int)MessageType.FromSlave);
-					request.Wait();
-					request = comm.ImmediateSend(c, source, (int)MessageType.FromSlave);
-					request.Wait();
-					//Console.Write("{0}-worker. Send to master {1} rows. Time:{2}\n", comm.Rank, rows, DateTime.Now.ToString("mm:ss.ffff"));
+					var offsetRequest = comm.ImmediateSend((int)offsetRow.GetValue(), source, (int)MessageType.OffsetRow);
+					
+					var rowsRequest = comm.ImmediateSend((int)rows.GetValue(), source, (int)MessageType.Rows);
+					
+					var matrixCRequest = comm.ImmediateSend(c, source, (int)MessageType.MatrixC);
+
+					offsetRequest.Wait();
+					rowsRequest.Wait();
+					matrixCRequest.Wait();
 				}
 			}
 		}
