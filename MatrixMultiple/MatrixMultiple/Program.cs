@@ -56,7 +56,8 @@ namespace MatrixMultiple
 
 						world.Broadcast(ref groupInProcess, 0);
 					}
-					
+
+					remaingingProcess -= groupInProcess;
 					var temp = new int[groupInProcess];
 
 					for (var j = 0; j < groupInProcess; j++)
