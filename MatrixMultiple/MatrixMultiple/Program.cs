@@ -6,8 +6,6 @@ namespace MatrixMultiple
 	using System.Collections.Generic;
 	using System.IO;
 	using System.Linq;
-	using System.Text;
-	using System.Threading;
 
 	enum MessageType
 	{
@@ -82,35 +80,33 @@ namespace MatrixMultiple
 
 		static void MPIMatrixMultiple(Communicator comm, string groupName)
 		{
-			var rowsA = 5;
-			var columnA = 5;
-			var columnB = 5;
+			var fileOffset = 2 * sizeof(int);
+			var matrixManager = new MatrixManager();
+			var matrixA = matrixManager.FileInitialization("A");
+			var matrixB = matrixManager.FileInitialization("B");
 
-			Console.WriteLine("Rank = {0}",comm.Rank);
+			//var matrixA = new Matrix(11, 2);
+			//var matrixB = new Matrix(2, 4);
+			//Console.WriteLine("{0} {1} {2}", matrixA.Rows, matrixA.Columns, matrixB.Columns);
+			//matrixManager.SimpleInitialization(matrixA);
+			//matrixManager.SimpleInitialization(matrixB);
+
+			var rowsA = matrixA.Rows;
+			var columnA = matrixA.Columns;
+			var columnB = matrixB.Columns;
 
 			if (comm.Rank == 0)
 			{
-				var matrixA = new Matrix(rowsA, columnA);
-				var matrixB = new Matrix(columnA, columnB);
-				var matrixC = new Matrix(rowsA, columnB);
-
-				var matrixManager = new MatrixManager();
-
-				matrixManager.SimpleInitialization(matrixA);
-				matrixManager.SimpleInitialization(matrixB);
-
-				matrixManager.Print(matrixA);
-				Console.Write("\n\n");
-
-				matrixManager.Print(matrixB);
-				Console.Write("\n\n");
-
 				int numberOfSlaves = comm.Size - 1;
 				var start = DateTime.Now;
 
 				int rowsPerSlave = rowsA / numberOfSlaves;
 				int remainingRows = rowsA % numberOfSlaves;
 				int offsetRow = 0;
+
+				var b = matrixB.Data;
+
+				((Intracommunicator)comm).Broadcast(ref b, 0);
 
 				for (var destination = 1; destination <= numberOfSlaves; destination++)
 				{
@@ -127,39 +123,36 @@ namespace MatrixMultiple
 					}
 
 					comm.Send(temp, destination, (int)MessageType.FromMaster);
-
-					var b = matrixB.Data;
-
-					comm.Send(b, destination, (int)MessageType.FromMaster);
-
 					offsetRow = offsetRow + rows;
 				}
 
-				for (var source = 1; source <= numberOfSlaves; source++)
-				{
-					offsetRow = comm.Receive<int>(source, (int)MessageType.FromSlave);
-					var rows = comm.Receive<int>(source, (int)MessageType.FromSlave);
-					var temp = comm.Receive<double[][]>(source, (int)MessageType.FromSlave);
 
-					for (var i = 0; i < rows; i++)
-					{
-						matrixC.Data[offsetRow + i] = temp[i];
-					}
+				using (var fs = new FileStream(groupName, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Write))
+				{
+					byte[] buff = BitConverter.GetBytes(rowsA);
+					fs.Write(buff, 0, sizeof(int));
+
+					buff = BitConverter.GetBytes(columnB);
+					fs.Write(buff, 0, sizeof(int));
 				}
+
+				comm.Barrier();
 
 				DateTime end = DateTime.Now;
 				Console.WriteLine("Group name: {0} with size = {1}", groupName, comm.Size);
-				matrixManager.Print(matrixC);
 				Console.Write("\n\n");
 				Console.Write(end - start);
 			}
 			else
 			{
+				double[][] b = null;
+
+				((Intracommunicator)comm).Broadcast<double[][]>(ref b, 0);
+
 				const int source = 0;
 				var offsetRow = comm.Receive<int>(source, (int)MessageType.FromMaster);
 				var rows = comm.Receive<int>(source, (int)MessageType.FromMaster);
 				var a = comm.Receive<double[][]>(source, (int)MessageType.FromMaster);
-				var b = comm.Receive<double[][]>(source, (int)MessageType.FromMaster);
 
 				var c = new double[rows][];
 
@@ -168,21 +161,29 @@ namespace MatrixMultiple
 					c[i] = new double[columnB];
 				}
 
-				for (var k = 0; k < columnB; k++)
+				//Console.WriteLine("{0} {1} {2}", columnB, rows, columnA);
+
+				using (var fs = new FileStream(groupName, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Write))
 				{
-					for (var i = 0; i < rows; i++)
+					fs.Seek(sizeof (double)*offsetRow*columnB + fileOffset, SeekOrigin.Begin);
+					for (var k = 0; k < columnB; k++)
 					{
-						c[i][k] = 0.0;
-						for (var j = 0; j < columnA; j++)
+						for (var i = 0; i < rows; i++)
 						{
-							c[i][k] = c[i][k] + a[i][j] * b[j][k];
+							c[i][k] = 0.0;
+							for (var j = 0; j < columnA; j++)
+							{
+								c[i][k] = c[i][k] + a[i][j] * b[j][k];
+							}
+
+							//Console.WriteLine("{0} {1:0.###} {2} {3} {4} {5}", comm.Rank, c[i][k], sizeof(double), offsetRow, i, k);
+							byte[] buff = BitConverter.GetBytes(c[i][k]);
+							fs.Write(buff, 0, sizeof(double));
 						}
 					}
 				}
 
-				comm.Send(offsetRow, source, (int)MessageType.FromSlave);
-				comm.Send(rows, source, (int)MessageType.FromSlave);
-				comm.Send(c, source, (int)MessageType.FromSlave);
+				comm.Barrier();
 			}
 		}
 	}
