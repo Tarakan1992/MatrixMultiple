@@ -3,6 +3,7 @@ using MPI;
 
 namespace MatrixMultiple
 {
+	using System.Collections.Generic;
 	using System.IO;
 	using System.Linq;
 	using System.Text;
@@ -18,23 +19,67 @@ namespace MatrixMultiple
 	{
 		static void Main(string[] args)
 		{
+			var groupsCount = int.Parse(args[0]);
+
 			using (new MPI.Environment(ref args))
 			{
-				var comm = Communicator.world;
+				var world = Communicator.world;
 
-				int[] ranks = {1, 2};
-				var newGroup = comm.Group.IncludeOnly(ranks);
+				var remaingingProcess = world.Size;
 
-				var newComm = comm.Create(newGroup);
-
-				if (ranks.Contains(comm.Rank))
+				if (groupsCount > remaingingProcess / 2)
 				{
-					MPIMatrixMultiple(newComm);
+					throw new Exception("Need more process or less group!");
+				}
+
+				var r = new Random();
+
+				var currentRank = 0;
+
+				var communicatrosList = new List<Communicator>(groupsCount);
+				var groupRanksList = new List<int[]>(groupsCount);
+
+				for (var i = 0; i < groupsCount; i++)
+				{
+					var groupInProcess = 2;
+					
+					if (i + 1 == groupsCount)
+					{
+						groupInProcess = remaingingProcess;
+					}
+					else
+					{
+						if (world.Rank == 0)
+						{
+							groupInProcess = r.Next(2, remaingingProcess - (groupsCount - i - 1) * 2);
+						}
+
+						world.Broadcast(ref groupInProcess, 0);
+					}
+					
+					var temp = new int[groupInProcess];
+
+					for (var j = 0; j < groupInProcess; j++)
+					{
+						temp[j] = currentRank++;
+					}
+
+					groupRanksList.Add(temp);
+					var newGroup = world.Group.IncludeOnly(temp);
+					communicatrosList.Add(world.Create(newGroup));
+				}
+
+				for (var i = 0; i < groupsCount; i++)
+				{
+					if (groupRanksList[i].Contains(world.Rank))
+					{
+						MPIMatrixMultiple(communicatrosList[i], i.ToString());
+					}
 				}
 			}
 		}
 
-		static void MPIMatrixMultiple(Communicator comm)
+		static void MPIMatrixMultiple(Communicator comm, string groupName)
 		{
 			var rowsA = 5;
 			var columnA = 5;
@@ -70,8 +115,6 @@ namespace MatrixMultiple
 				{
 					int rows = (destination <= remainingRows) ? rowsPerSlave + 1 : rowsPerSlave;
 
-					//Console.Write("Send to {0}-worker {1} rows. Time:{2}\n", destination, rows, DateTime.Now.ToString("mm:ss.ffff"));
-
 					comm.Send(offsetRow, destination, (int)MessageType.FromMaster);
 					comm.Send(rows, destination, (int)MessageType.FromMaster);
 
@@ -97,8 +140,6 @@ namespace MatrixMultiple
 					var rows = comm.Receive<int>(source, (int)MessageType.FromSlave);
 					var temp = comm.Receive<double[][]>(source, (int)MessageType.FromSlave);
 
-					//Console.Write("Recive from {0}-worker {1} rows. Time:{2}\n", source, rows, DateTime.Now.ToString("mm:ss.ffff"));
-
 					for (var i = 0; i < rows; i++)
 					{
 						matrixC.Data[offsetRow + i] = temp[i];
@@ -106,6 +147,7 @@ namespace MatrixMultiple
 				}
 
 				DateTime end = DateTime.Now;
+				Console.WriteLine("Group name: {0} with size = {1}", groupName, comm.Size);
 				matrixManager.Print(matrixC);
 				Console.Write("\n\n");
 				Console.Write(end - start);
@@ -117,8 +159,6 @@ namespace MatrixMultiple
 				var rows = comm.Receive<int>(source, (int)MessageType.FromMaster);
 				var a = comm.Receive<double[][]>(source, (int)MessageType.FromMaster);
 				var b = comm.Receive<double[][]>(source, (int)MessageType.FromMaster);
-
-				//Console.Write("{0}-worker. Recive from master {1} rows. Time:{2}\n", comm.Rank, rows, DateTime.Now.ToString("mm:ss.ffff"));
 
 				var c = new double[rows][];
 
@@ -142,7 +182,6 @@ namespace MatrixMultiple
 				comm.Send(offsetRow, source, (int)MessageType.FromSlave);
 				comm.Send(rows, source, (int)MessageType.FromSlave);
 				comm.Send(c, source, (int)MessageType.FromSlave);
-				//Console.Write("{0}-worker. Send to master {1} rows. Time:{2}\n", comm.Rank, rows, DateTime.Now.ToString("mm:ss.ffff"));
 			}
 		}
 	}
